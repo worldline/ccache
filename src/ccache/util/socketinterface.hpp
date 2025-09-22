@@ -72,9 +72,9 @@ public:
   Stream(socket_t sock);
 
   /// @brief receives messages from stream
-  size_t read(nonstd::span<uint8_t> writable_span) const;
+  ssize_t read(nonstd::span<uint8_t> writable_span) const;
   /// @brief sends messages over stream
-  size_t write(nonstd::span<const uint8_t> ptr) const;
+  ssize_t write(nonstd::span<const uint8_t> ptr) const;
 
 private:
   /// @brief the socket identifier

@@ -39,7 +39,7 @@ Stream::select_read(time_t sec,
                   &tv);
 }
 
-size_t
+ssize_t
 Stream::read(const nonstd::span<uint8_t> writable_span) const
 {
   try {
@@ -47,7 +47,6 @@ Stream::read(const nonstd::span<uint8_t> writable_span) const
     // If prepare_write_span returned an empty span or threw, this might fail.
     if (writable_span.empty()) {
       // This case implies writable span is invalid. Either n=0 or too large!
-      // CHECK StreamBuffer::prepare
       return 0;
     }
 
@@ -70,7 +69,11 @@ Stream::read(const nonstd::span<uint8_t> writable_span) const
       return 0;
     } else { // bytes_read < 0
       // Handle errors. EAGAIN/EWOULDBLOCK mean no data *yet*.
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      if (errno == EAGAIN
+#if EAGAIN != EWOULDBLOCK
+          || errno == EWOULDBLOCK
+#endif
+      ) {
         // No data available right now, but socket is still usable.
         // This might happen if non-blocking was used, or if select timed out.
         // If we just timed out on select, this is expected.
@@ -90,7 +93,7 @@ Stream::read(const nonstd::span<uint8_t> writable_span) const
   }
 }
 
-size_t
+ssize_t
 Stream::write(nonstd::span<const uint8_t> ptr) const
 {
   return ::send(m_sock, ptr.data(), ptr.size(), MSG_NOSIGNAL);
