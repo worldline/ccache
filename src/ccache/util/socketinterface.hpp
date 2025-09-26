@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include "ccache/util/streambuffer.hpp"
-
 #include <nonstd/span.hpp>
 #include <tl/expected.hpp>
 
@@ -42,7 +40,6 @@ constexpr auto invalid_socket_t = -1;
 #include <string>
 
 namespace fs = std::filesystem;
-using StreamBuffer = tlv::StreamBuffer<uint8_t>;
 
 constexpr auto SOCKET_PATH_LENGTH = 256;
 #ifdef _WIN32
@@ -161,9 +158,6 @@ public:
   UnixSocket() = delete;
   UnixSocket(const std::string& host);
   ~UnixSocket();
-
-  /// @brief the buffer used for reading and writing
-  StreamBuffer connection_stream;
 
   /// @brief generate an encoded file system path to the socket
   std::filesystem::path generate_path() const;

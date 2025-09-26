@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <utility>
 
@@ -218,6 +217,11 @@ public:
       }
     }
 
+    if (m_result.status == SUCCESS) {
+      std::memcpy(&m_result.status,
+                  &get_field<FIELD_TYPE_STATUS_CODE>(m_result.fields)->value,
+                  1);
+    }
     return m_result;
   }
 };
@@ -226,30 +230,34 @@ class TLVSerializer
 {
 private:
   std::size_t m_position{0};
-  std::reference_wrapper<StreamBuffer<uint8_t>> m_buffer;
+  util::Bytes m_buffer;
 
   size_t
   encode_length(uint32_t length)
   {
     if (length <= LENGTH_1_BYTE_MAX) {
-      m_buffer.get().write(&length, sizeof(uint8_t));
+      std::memcpy(m_buffer.data() + m_position, &length, sizeof(uint8_t));
       return 1;
     } else if (length <= 0xFFFF) {
-      m_buffer.get().write(&LENGTH_3_BYTE_FLAG, sizeof(uint8_t));
-      m_buffer.get().write(&length, sizeof(uint16_t));
+      std::memcpy(m_buffer.data() + m_position, &LENGTH_3_BYTE_FLAG, sizeof(uint8_t));
+      std::memcpy(m_buffer.data() + m_position + 1, &length, sizeof(uint16_t));
       return 3;
-    } else {
-      m_buffer.get().write(&LENGTH_5_BYTE_FLAG, sizeof(uint8_t));
-      m_buffer.get().write(&length, sizeof(uint32_t));
+    } else if (length <= 0xFFFFFFFF) {
+      std::memcpy(m_buffer.data() + m_position, &LENGTH_5_BYTE_FLAG, sizeof(uint8_t));
+      std::memcpy(m_buffer.data() + m_position + 1, &length, sizeof(uint32_t));
       return 5;
+    } else {
+      std::memcpy(m_buffer.data() + m_position, &LENGTH_9_BYTE_FLAG, sizeof(uint8_t));
+      std::memcpy(m_buffer.data() + m_position + 1, &length, sizeof(uint64_t));
+      return 9;
     }
   }
 
   bool
   begin_message(const MessageHeader& msghdr)
   {
+    std::memcpy(m_buffer.data(), &msghdr, sizeof(MessageHeader));
     m_position = TLV_HEADER_SIZE; // position past header
-    m_buffer.get().write(&msghdr, sizeof(MessageHeader));
     return true;
   }
 
@@ -278,41 +286,40 @@ private:
     // Calculate space needed: 1 byte tag + variable length + data
     size_t length_encoding_size = (length <= LENGTH_1_BYTE_MAX) ? 1
                                   : (length <= 0xFFFF)          ? 3
-                                                                : 5;
-    size_t needed = 1 + length_encoding_size + length;
-
-    if ((m_position + needed) > MAX_MSG_SIZE) {
-      return false;
+                                  : (length <= 0xFFFFFFFF)      ? 5
+                                                                : 9;
+    size_t needed = 1 + length_encoding_size + length + m_position;
+    if (needed > m_buffer.size()) {
+      m_buffer.resize(needed);
     }
 
     // Write tag
-    m_buffer.get().write(&tag, sizeof(uint8_t));
+    m_buffer.insert(
+      m_buffer.data() + m_position, &tag, sizeof(uint8_t));
     m_position++;
 
     // Write variable length
     m_position += encode_length(length);
 
     // Write value
-    m_buffer.get().write(data, length);
+    m_buffer.insert(m_buffer.data() + m_position,
+                          reinterpret_cast<const uint8_t*>(data),
+                          length);
     m_position += length;
     return true;
   }
 
-  std::pair<uint8_t*, size_t>
-  finalize() const
+  util::Bytes&&
+  finalize()
   {
-    if (m_position == 0) {
-      return {nullptr, 0};
+    if (m_buffer.size() > m_position) {
+      m_buffer.resize(m_position);
     }
-    return {m_buffer.get().data(), m_position};
+    return std::move(m_buffer);
   }
 
 public:
-  TLVSerializer(StreamBuffer<uint8_t>& stream)
-    : m_buffer(stream)
-  {
-  }
-  TLVSerializer() = delete;
+  TLVSerializer() = default;
   TLVSerializer(const TLVSerializer&) = delete;
   TLVSerializer& operator=(const TLVSerializer&) = delete;
   TLVSerializer(TLVSerializer&&) = delete;
@@ -322,7 +329,7 @@ public:
   void
   release()
   {
-    m_buffer.get().release();
+    m_buffer.clear();
     m_position = 0;
   }
 
@@ -333,12 +340,13 @@ public:
   }
 
   template<typename... Args>
-  std::pair<uint8_t*, size_t>
+  util::Bytes&&
   serialize(const int& msg_tag, Args&&... args)
   {
     constexpr auto args_len = sizeof...(args);
     constexpr uint8_t num_fields = args_len / 2;
-    m_buffer.get().release();
+
+    m_buffer.resize(128);
     begin_message({TLV_VERSION, num_fields, static_cast<uint16_t>(msg_tag)});
 
     auto serialise_fields =

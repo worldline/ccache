@@ -237,11 +237,11 @@ BackendNode::dispatch(const int& msg_tag, Args&&... args)
 {
   static_assert(sizeof...(args) % 2 == 0,
                 "Arguments must come in pairs: tag, value, tag, value, ...");
-  tlv::TLVSerializer serializer{bsock->connection_stream};
-  auto [data, length] =
+  tlv::TLVSerializer serializer{};
+  auto bytes =
     serializer.serialize(msg_tag, std::forward<Args>(args)...);
 
-  auto send_res = bsock->send({data, data + length});
+  auto send_res = bsock->send({bytes.data(), bytes.size()});
   serializer.release();
   if (!send_res.has_value()) {
     return tl::unexpected<tlv::ResponseStatus>(
@@ -260,7 +260,7 @@ BackendNode::dispatch(const int& msg_tag, Args&&... args)
   }
 
   if (res.status != tlv::SUCCESS && msg_tag != tlv::MSG_TYPE_SETUP_REQUEST) {
-    return tl::unexpected<tlv::ResponseStatus>(tlv::ERROR);
+    return tl::unexpected<tlv::ResponseStatus>(res.status);
   }
 
   return res;
