@@ -74,10 +74,6 @@ private:
       m_result.fields.emplace_back(make_tlv_field<SETUP_TYPE_OPERATION_TIMEOUT>(
         tag, payload.data(), length));
       break;
-    case SETUP_TYPE_BUFFERSIZE:
-      m_result.fields.emplace_back(
-        make_tlv_field<SETUP_TYPE_BUFFERSIZE>(tag, payload.data(), length));
-      break;
     case FIELD_TYPE_TIMESTAMP:
       m_result.fields.emplace_back(
         make_tlv_field<FIELD_TYPE_TIMESTAMP>(tag, payload.data(), length));
@@ -132,7 +128,6 @@ private:
     switch (tag) {
     case SETUP_TYPE_VERSION:
     case SETUP_TYPE_OPERATION_TIMEOUT:
-    case SETUP_TYPE_BUFFERSIZE:
     case FIELD_TYPE_TIMESTAMP:
     case FIELD_TYPE_FLAGS:
     case FIELD_TYPE_STATUS_CODE:

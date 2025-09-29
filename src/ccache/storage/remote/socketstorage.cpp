@@ -86,8 +86,6 @@ BackendNode::setup_backend_service()
   auto res = dispatch(tlv::MSG_TYPE_SETUP_REQUEST,
                       tlv::SETUP_TYPE_VERSION,
                       tlv::TLV_VERSION,
-                      tlv::SETUP_TYPE_BUFFERSIZE,
-                      g_buffersize,
                       tlv::SETUP_TYPE_OPERATION_TIMEOUT,
                       g_operation_timeout.count());
 
@@ -108,10 +106,6 @@ BackendNode::setup_backend_service()
     if (ofield) {
       auto op_timeout = ofield->value;
       g_operation_timeout = std::chrono::seconds{op_timeout};
-    }
-    auto* bfield = tlv::get_field<tlv::SETUP_TYPE_BUFFERSIZE>(res->fields);
-    if (bfield) {
-      g_buffersize = bfield->value;
     }
   }
 

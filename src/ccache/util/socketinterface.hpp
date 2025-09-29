@@ -48,7 +48,7 @@ constexpr auto SOCKET_PATH_TEMPLATE = "%TEMP%\\backend-%s.sock";
 constexpr auto SOCKET_PATH_TEMPLATE = "/tmp/backend-%s.sock";
 #endif
 
-static size_t g_buffersize = 1024;
+static size_t g_buffersize = 212992;
 static std::chrono::seconds g_operation_timeout{15};
 
 constexpr std::chrono::seconds CONNECTION_TIMEOUT{5};
