@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+
+import argparse
+import base64
+import os
+import signal
+import sys
+from functools import partial
+from http import HTTPStatus
+from socketserver import UnixStreamServer
+from http.server import SimpleHTTPRequestHandler
+from pathlib import Path
+
+
+class ParseError(Exception):
+    pass
+
+
+class Serializer:
+    def __call__(self, http_message):
+        return 0
+
+
+class Parser:
+    def __call__(self, raw_data):
+        if len(raw_data) < 1:
+            raise ParseError("Empty message")
+
+        # TODO
+        message_type = int.from_bytes(raw_data[4])
+        key, value, flags = self.extract(message_type, raw_data[2:])
+
+        # Map protocol message types to HTTP-like operations
+        type_mapping = {0x01: "GET", 0x02: "PUT", 0x03: "DELETE", 0x04: "HEAD"}
+
+        request_type = type_mapping.get(message_type)
+        if not request_type:
+            raise ParseError(f"Unknown message type: {message_type}")
+
+        return {"type": request_type, "key": key, "data": value, "flags": flags}
+
+
+class AuthenticationError(Exception):
+    pass
+
+
+class UnixHTTPServer(UnixStreamServer):
+    def __init__(self, server_address, RequestHandlerClass):
+        # Remove existing socket file if it exists
+        if os.path.exists(server_address):
+            os.unlink(server_address)
+        super().__init__(server_address, RequestHandlerClass)
+        self.socket_path = server_address
+
+    def server_close(self):
+        super().server_close()
+        # Clean up socket file
+        if os.path.exists(self.socket_path):
+            os.unlink(self.socket_path)
+
+
+class SocketRequestHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, basic_auth=None, **kwargs):
+        self.basic_auth = None
+        if basic_auth:
+            self.basic_auth = base64.b64encode(basic_auth.encode("ascii")).decode(
+                "ascii"
+            )
+        super().__init__(*args, **kwargs)
+
+    def handle_one_request(self):
+        """Handle a single request using custom protocol parsing.
+
+        This overrides the standard HTTP parsing with our custom protocol.
+        """
+        try:
+            # Parse our custom TV or whatever protocol
+            if not self._parse_request():
+                # Parsing failed, error already sent
+                return
+
+            # Map protocol operation to method name
+            mname = "do_" + self.custom_command
+            if not hasattr(self, mname):
+                self.send_error(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "Unsupported operation (%r)" % self.custom_command,
+                )
+                return
+
+            method = getattr(self, mname)
+            method()
+            self.wfile.flush()  # actually send the response if not already done.
+
+        except TimeoutError as e:
+            # a read or a write timed out. Discard this connection
+            self.log_error("Request timed out: %r", e)
+            self.close_connection = True
+            return
+        except Exception as e:
+            # Handle any protocol parsing errors
+            self.log_error("Protocol error: %r", e)
+            self.send_error(HTTPStatus.BAD_REQUEST, f"Protocol error: {e}")
+            self.close_connection = True
+            return
+
+    def _create_fake_headers(self, parsed_message):
+        """Create a fake headers object for compatibility with existing HTTP methods."""
+
+        class FakeHeaders:
+            def __init__(self, data_length=0):
+                self._headers = {"Content-Length": str(data_length)}
+
+            def get(self, key, default=None):
+                return self._headers.get(key, default)
+
+            def __getitem__(self, key):
+                return self._headers[key]
+
+        return FakeHeaders(len(parsed_message.get("data", b"")))
+
+    def _parse_request(self):
+        """Parse and validate the request before processing"""
+        try:
+            raw_data = self._read_protocol_message()
+            if not raw_data:
+                self.close_connection = True
+                return False
+
+            # TODO write the protocol parser
+            parsed_message = Parser(raw_data)
+            self.custom_command = parsed_message["type"]
+            # TODO take these parameters somehow!
+            self.custom_path = "TAKE ME FROM ARGS"
+            self.key = parsed_message.get("key", b"")
+            self.custom_data = parsed_message.get("value", b"")
+            self.custom_metadata = parsed_message.get("metadata", {})
+
+            self.command = self.custom_command
+            self.path = self.custom_path
+            self.headers = self._create_fake_headers(parsed_message)
+
+            print(f"Parsed custom protocol: {self.custom_command} {self.custom_path}")
+            return True
+        except Exception as e:
+            raise ParseError(f"Failed to parse request: {e}")
+
+    def _read_protocol_message(self):
+        """Read a complete message from the socket according to your protocol."""
+        try:
+            length_bytes = self.rfile.read(12)
+            if len(length_bytes) < 12:  # header size at least
+                return None  # Connection closed
+
+            message_type = int.from_bytes(length_bytes, byteorder="big")
+            message_length = int.from_bytes(length_bytes, byteorder="big")
+            if message_length > 1024 * 1024 * 1024:  # 1GB limit
+                raise ValueError(f"Message too large: {message_length}")
+
+            message_data = self.rfile.read(message_length)
+            if len(message_data) < message_length:
+                raise ValueError("Incomplete message")
+
+            return message_data
+
+        except Exception as e:
+            raise ParseError(f"Failed to read protocol message: {e}")
+
+    def do_GET(self):  # noqa: N802
+        try:
+            self._handle_auth()
+            super().do_GET()
+        except ParseError as e:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except AuthenticationError:
+            self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+
+    def do_HEAD(self):  # noqa: N802
+        try:
+            self._handle_auth()
+            super().do_HEAD()
+        except ParseError as e:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except AuthenticationError:
+            self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+
+    def do_PUT(self):  # noqa: N802
+        path = Path(self.translate_path(self.path))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._handle_auth()
+            file_length = int(self.headers["Content-Length"])
+            path.write_bytes(self.rfile.read(file_length))
+            self.send_response(HTTPStatus.CREATED)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except ParseError as e:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except AuthenticationError:
+            self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+        except OSError:
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Cannot open file for writing"
+            )
+
+    def do_DELETE(self):  # noqa: N802
+        path = Path(self.translate_path(self.path))
+        try:
+            self._handle_auth()
+            path.unlink()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except ParseError as e:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(e))
+        except AuthenticationError:
+            self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+        except OSError:
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Cannot delete file")
+
+    def _handle_auth(self):
+        if not self.basic_auth:
+            return
+        authorization = self.headers.get("authorization")
+        if authorization:
+            authorization = authorization.split()
+            if authorization == ["Basic", self.basic_auth]:
+                return
+        raise AuthenticationError("Authentication required")
+
+
+def run(handler_class, server_class, socket_path):
+    handler_class.protocol_version = "HTTP/1.1"
+
+    with server_class(socket_path, handler_class) as httpd:
+        print(f"Serving over Unix socket {socket_path} ...")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nKeyboard interrupt received, exiting.")
+            sys.exit(0)
+
+
+def on_terminate(signum, _frame):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(128 + signum)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--basic-auth", "-B", help="Basic auth tuple like user:pass")
+    parser.add_argument(
+        "--directory",
+        "-d",
+        default=Path.cwd(),
+        help="Specify alternative directory [default:current directory]",
+    )
+    parser.add_argument(
+        "socket_path",
+        action="store",
+        default="/tmp/ccache_proxy.sock",
+        type=str,
+        nargs="?",
+        help="Specify unix socket path [default: /tmp/ccache_proxy.sock]",
+    )
+    args = parser.parse_args()
+
+    handler_class = partial(SocketRequestHandler, basic_auth=args.basic_auth)
+
+    os.chdir(args.directory)
+
+    signal.signal(signal.SIGINT, on_terminate)
+    signal.signal(signal.SIGTERM, on_terminate)
+
+    run(
+        handler_class=handler_class,
+        server_class=UnixHTTPServer,
+        socket_path=args.socket_path,
+    )
