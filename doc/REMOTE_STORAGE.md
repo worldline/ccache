@@ -106,49 +106,62 @@ Used within `FIELD_TYPE_STATUS_CODE`.
 
 ### Definitions
 
-```xml
-<key>          ::= <FIELD_TYPE_KEY> <key_data>
-<key_data>     ::= bytes        ; 20 bytes
-<value>        ::= <value_len> <value_data>
-<value_len>    ::= uint64_t        ; host byte order
-<value_data>   ::= uint8_t*        ; <value_len> bytes
-<msg>          ::= <msg_len> <msg_data>
-<msg_len>      ::= uint8_t
-<msg_data>     ::= uint8_t*        ; <msg_len> bytes, UTF-8
-```
-
-### Server greeting to client `MSG_TYPE_GREETING`
+**The message:**
 
 ```markdown
-<greeting>     ::= <protocol_ver> <capabilities>
-<protocol_ver> ::= 0x00            ; protocol version 1
-<capabilities> ::= <cap_len> <cap_data>
-<cap_len>      ::= length (`uint8_t`)
-<cap_data>     ::= <capability>*   ; <cap_len> uint8_t entries
-<capability>   ::= 0x00            ; capability: get/put/remove v1
+<msg>          ::= <msg_tag> <msg_len> <msg_data>
+                ; also = (<greet_msg> | <get_req> | <put_req> | <remove_req> |
+                             <get_resp> | <put_resp> | <remove_resp>)
+<msg_len>      ::= uint64_t
+<msg_data>     ::= uint8_t*        ; <msg_len> bytes, UTF-8
+                                   ; includes TV fields
+```
+
+**Some TV-fields:**
+
+```markdown
+<flags>        ::= <FIELD_TYPE_FLAGS> uint8_t   ; bit 0 (LSB): overwrite, other bits: not defined
+<key>          ::= <FIELD_TYPE_KEY> <key_data>
+<key_data>     ::= bytes   ; 20 bytes
+<value>        ::= <FIELD_TYPE_VALUE> <value_data> ; MUST come as last fields in message
+                                                   ; else length is not deducible
+<value_data>   ::= uint8_t*
+```
+
+### Server greeting to client
+
+```markdown
+<greet_msg>    ::= <MSG_TYPE_GREETING> <msg_len> <greeting>
+<greeting>     ::= (<version> <cap_len> <capabilities>)* ; version for capabilities
+                                                         ; supports 255 versions and 255
+                                                         ; capabilities 
+<version> ::= 0x00               ; capabilities version 1
+<cap_len> ::= uint8_t            ; 255 entries supported
+<capabilities> ::= <cap_tag>*    ; <cap_len> uint8_t entries
+                                 ; capability: get/put/remove
 ```
 
 ### Client requests
 
 ```markdown
 <request>      ::= <get_req> | <put_req> | <remove_req>
-<get_req>      ::= 0x01 <length> <key>
-<put_req>      ::= 0x02 <length> <put_flags> <key> <value>
-<remove_req>   ::= 0x03 <length> <key>
-<put_flags>    ::= uint8_t         ; bit 0 (LSB): overwrite, other bits: ignored
+<get_req>      ::= <MSG_TYPE_GET_REQUEST> <length> <key>
+<put_req>      ::= <MSG_TYPE_PUT_REQUEST> <length> <flags> <key> <value>
+<remove_req>   ::= <MSG_TYPE_DEL_REQUEST> <length> <key>
 ```
 
 ### Server responses
 
 ```markdown
 <response>     ::= <get_resp> | <put_resp> | <remove_resp>
-<get_resp>     ::= 0x81 <length> (<ok> <value> | <noop> | <err> | <timeout>)
-<put_resp>     ::= 0x82 <length> (<ok>         | <noop> | <err> | <timeout>)
-<remove_resp>  ::= 0x83 <length> (<ok>         | <noop> | <err> | <timeout>)
-<ok>           ::= 0x00            ; operation done
-<noop>         ::= 0x01            ; operation not done (key not found/stored/removed)
-<err>          ::= 0x02 <msg>      ; e.g. bad parameters or failed connection
-<timeout>      ::= 0x03            ; e.g. slow host lookup or connection setup
+<get_resp>     ::= <MSG_TYPE_GET_RESPONSE> <length> (<ok> <value> | <noop> | <err> | <timeout>)
+<put_resp>     ::= <MSG_TYPE_PUT_RESPONSE> <length> (<ok>         | <noop> | <err> | <timeout>)
+<remove_resp>  ::= <MSG_TYPE_DEL_RESPONSE> <length> (<ok>         | <noop> | <err> | <timeout>)
+<ok>           ::= <FIELD_TYPE_STATUS_CODE> 0x00           ; operation done
+<noop>         ::= <FIELD_TYPE_STATUS_CODE> 0x01           ; operation not done (key not found/stored/removed)
+<err>          ::= <FIELD_TYPE_STATUS_CODE> 0x02 <err_msg> ; e.g. bad parameters or failed connection
+<timeout>      ::= <FIELD_TYPE_STATUS_CODE> 0x03           ; e.g. slow host lookup or connection setup
+<err_msg>      ::= <FIELD_TYPE_ERROR_MESSAGE> uint8_t*     ; bytes represent a string (use for logging)
 ```
 
 ## 7. Configuration and Negotiation
